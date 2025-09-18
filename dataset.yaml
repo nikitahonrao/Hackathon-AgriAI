@@ -1,0 +1,4 @@
+train: C:\Hackathon-AgriAI\global-wheat-detection\train
+val: C:\Hackathon-AgriAI\global-wheat-detection\test
+nc: 1
+names: ['flagleaf']

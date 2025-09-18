@@ -1,97 +1,149 @@
-# ====================================
-# Streamlit App: Flag Leaf Measurement & Yield Prediction
-# ====================================
-
 import streamlit as st
-import cv2
+from PIL import Image
 import numpy as np
+import cv2
+import joblib
+import os
 import pandas as pd
-from ultralytics import YOLO
-from sklearn.linear_model import LinearRegression
-import tempfile
+from src.infer_and_measure import detect_and_measure
+from src.wheather_utils import get_weather   # ✅ fixed spelling
 
-# -------------------------------
-# Config
-# -------------------------------
-st.set_page_config(page_title="Flag Leaf Yield Prediction", layout="wide")
-st.title("🌾 AI-Assisted Flag Leaf Measurement & Yield Prediction")
-st.write("Upload UAV crop field images to detect flag leaves and predict yield.")
+st.set_page_config(layout="wide", page_title="🌾 Flag Leaf Measurement & Yield Prediction")
+st.title("🌾🌾Flag Leaf Measurement & Yield Prediction (Wheat)🌾🌾")
 
-# Load YOLO model (use pretrained or your fine-tuned one)
-model = YOLO("C:/HACKATHON-AGRIAI/global-wheat_dataset/runs/detect/train/weights/best.pt")
-   # replace with your trained model file if available
+# ---------------------------
+# Sidebar
+# ---------------------------
+with st.sidebar:
+    st.header("Image & Location")
+    location = st.text_input("Location (name/coords):", "Unknown location")
+    gsd = st.number_input(
+        "GSD (cm/pixel)", min_value=0.01, value=0.2, step=0.01,
+        help="Ground Sampling Distance (cm per pixel). Provide correct GSD for accurate measurements."
+    )
+    uploaded = st.file_uploader(
+        "Upload image", type=['jpg','jpeg','png'], accept_multiple_files=False
+    )
 
-# Load regression dataset (replace with your real dataset)
-# Must have columns: Width_cm, Length_cm, Area_cm2, Yield
-try:
-    df_train = pd.read_csv("leaf_yield_dataset.csv")
-    X = df_train[["Width_cm","Length_cm","Area_cm2"]]
-    y = df_train["Yield"]
-    reg_model = LinearRegression().fit(X, y)
-    st.success("✅ Regression model trained successfully from dataset.")
-except Exception as e:
-    st.warning("⚠️ No dataset found. Using demo model.")
-    data = {
-        "Width_cm": np.random.uniform(1,5,20),
-        "Length_cm": np.random.uniform(5,20,20),
-        "Area_cm2": np.random.uniform(20,100,20),
-        "Yield": np.random.uniform(2,6,20)  # tons/hectare
-    }
-    df_train = pd.DataFrame(data)
-    X = df_train[["Width_cm","Length_cm","Area_cm2"]]
-    y = df_train["Yield"]
-    reg_model = LinearRegression().fit(X, y)
+col1, col2 = st.columns([1,1])
 
-# -------------------------------
-# File Upload
-# -------------------------------
-uploaded_file = st.file_uploader("📤 Upload UAV Image", type=["jpg","png","jpeg"])
+# ---------------------------
+# Process uploaded image
+# ---------------------------
+if uploaded is not None:
+    img = Image.open(uploaded).convert("RGB")
+    img_arr = np.array(img)
+    st.image(img, caption="Uploaded image", use_container_width=True)
 
-# Ground Sampling Distance (metadata)
-GSD = st.number_input("Ground Sampling Distance (cm/pixel)", value=0.2, step=0.01)
+    # Save temporarily
+    temp_dir = os.path.join(os.getcwd(), "tmp")
+    os.makedirs(temp_dir, exist_ok=True)
+    temp_path = os.path.join(temp_dir, uploaded.name)
+    img.save(temp_path)
 
-if uploaded_file is not None:
-    # Save temp file
-    tfile = tempfile.NamedTemporaryFile(delete=False)
-    tfile.write(uploaded_file.read())
-    img_path = tfile.name
-    
-    # Read image
-    img = cv2.imread(img_path)
-    
-    # Run YOLO detection
-    results = model.predict(img, conf=0.25)
-    
-    leaf_data = []
-    for box in results[0].boxes.xyxy:
-        x1, y1, x2, y2 = box
-        width_px = x2 - x1
-        height_px = y2 - y1
-        
-        # Convert pixels → cm
-        width_cm = float(width_px) * GSD
-        height_cm = float(height_px) * GSD
-        area_cm2 = width_cm * height_cm
-        
-        leaf_data.append([width_cm, height_cm, area_cm2])
-        
-        # Draw box + text
-        cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), (0,255,0), 2)
-        cv2.putText(img, f"L:{height_cm:.1f}cm W:{width_cm:.1f}cm",
-                    (int(x1), int(y1)-10), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5, (0,0,255), 2)
-    
-    # Show annotated image
-    st.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), caption="Detected Leaves", use_column_width=True)
-    
-    if leaf_data:
-        df = pd.DataFrame(leaf_data, columns=["Width_cm","Length_cm","Area_cm2"])
-        st.write("📏 Leaf Measurements (cm):")
-        st.dataframe(df)
-        
-        # Predict yield
-        X_new = df[["Width_cm","Length_cm","Area_cm2"]]
-        yield_pred = reg_model.predict(X_new)
-        st.success(f"🌾 Predicted Yield: {np.mean(yield_pred):.2f} tons/hectare")
+    st.info("Running detection... (this may take a few secs)")
+    results = detect_and_measure(temp_path, gsd)
+
+    # ---------------------------
+    # Draw boxes and overlay masks
+    # ---------------------------
+    vis = img_arr.copy()
+    for idx, r in enumerate(results, 1):
+        x1, y1, x2, y2 = r["bbox"]
+        color = tuple(np.random.randint(0,255,3).tolist())  # random color per leaf
+        cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
+        if r.get("mask") is not None:
+            mask = r["mask"]
+            mh, mw = mask.shape
+            roi = vis[y1:y1+mh, x1:x1+mw]
+            if roi.shape[:2] != mask.shape:
+                mask = cv2.resize(mask, (roi.shape[1], roi.shape[0]))
+            overlay = np.zeros_like(roi)
+            overlay[mask > 0] = color
+            alpha = 0.35
+            vis[y1:y1+overlay.shape[0], x1:x1+overlay.shape[1]] = cv2.addWeighted(
+                roi, 1 - alpha, overlay, alpha, 0
+            )
+
+    st.subheader("Detections (overlay)")
+    st.image(vis, use_container_width=True)
+
+    # ---------------------------
+    # Measurements summary
+    # ---------------------------
+    st.subheader("Measurements")
+    if len(results) == 0:
+        st.warning("No flag leaves detected.")
     else:
-        st.warning("No leaves detected. Try another image.")
+        rows = []
+        for i, r in enumerate(results, 1):
+            rows.append({
+                "leaf": i,
+                "length_cm": round(r["length_cm"], 2),
+                "width_cm": round(r["width_cm"], 2),
+                "area_cm2": round(r["area_cm2"], 2),
+                "confidence": round(r["conf"], 3)
+            })
+        df = pd.DataFrame(rows)
+        st.table(df)
+        st.success(f"Detected {len(results)} flag leaves")
+
+        # ---------------------------
+        # Leaf feature extraction
+        # ---------------------------
+        total_area = df["area_cm2"].sum()
+        mean_area = df["area_cm2"].mean()
+        mean_length = df["length_cm"].mean()
+        mean_width = df["width_cm"].mean()
+        leaf_count = len(results)
+
+        feat_dict = {
+            "leaf_count": leaf_count,
+            "mean_area": mean_area,
+            "total_area": total_area,
+            "mean_length": mean_length,
+            "mean_width": mean_width
+        }
+
+        # ---------------------------
+        # Add weather features
+        # ---------------------------
+     #   weather_data = get_weather(location)
+     #   if weather_data:
+      #      st.subheader("🌦 Weather Data")
+      #      st.json(weather_data)
+      #      feat_dict.update({
+       #         "temp_c": weather_data.get("temp_c", 0),
+       #         "humidity": weather_data.get("humidity", 0),
+      #        "rainfall": weather_data.get("rainfall", 0)
+      #      })
+
+        feat_df = pd.DataFrame([feat_dict])
+
+        # ---------------------------
+        # Load model & predict yield
+        # ---------------------------
+        # ---------------------------
+if 'feat_df' in locals():
+    # Try multiple possible locations for yield_model.pkl
+    possible_paths = [
+        os.path.join(os.getcwd(), "models", "yield_model.pkl"),           # root folder
+        os.path.join(os.path.dirname(__file__), "..", "models", "yield_model.pkl"),  # relative path
+        os.path.join(os.path.dirname(__file__), "models", "yield_model.pkl")         # inside src/
+    ]
+
+    model_path = None
+    for path in possible_paths:
+        norm_path = os.path.normpath(path)
+        if os.path.exists(norm_path):
+            model_path = norm_path
+            break
+
+    if model_path:
+        model = joblib.load(model_path)
+        pred = model.predict(feat_df)[0]
+        st.metric("🌾 Predicted Yield", f"{pred:.2f} kg/ha")
+    else:
+        st.info("⚠️ Yield model not found. Run training (src/train_yield_model.py) to create models/yield_model.pkl")
+else:
+    st.warning("Cannot predict yield because no flag leaves were detected.")
