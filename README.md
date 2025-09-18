@@ -14,29 +14,44 @@ Streamlit Web App: User-friendly interface to upload images, visualize detection
 
 <h4>📂 Project Structure </h4>
 ├── data/                 # Dataset (images + annotations)
+
 │   ├── train/            # Training images
+
 │   ├── val/              # Validation images
+
 │   ├── labels/           # YOLO label files
+
 │   └── train.csv         # Annotation file (image_id, bbox, etc.)
+
 │
 ├── src/                  # Source code
+
 │   ├── train_yolo.py     # Train YOLOv8 model
+
 │   ├── split_data.py     # Split dataset into train/val
+
 │   ├── train_yield_model.py # Train regression model for yield prediction
+
 │   ├── inference.py      # Run YOLO detection + measurement
+
 │   └── app.py            # Streamlit web app
+
 │
 ├── models/               # Saved YOLO + ML models
+
 ├── results/              # Detection and training results
+
 ├── wheat.yaml            # Dataset config for YOLO
+
 ├── requirements.txt      # Dependencies
+
 └── README.md             # Project documentation
 
 
 <h4>⚙️ Installation</h4>
 Clone this repository:
 
-git clone https://github.com/yourusername/flag-leaf-ai.git
+git clone https://github.com/nikitahonrao/Hackathon-AgriAI
 cd flag-leaf-ai
 
 Create a virtual environment & install dependencies:
